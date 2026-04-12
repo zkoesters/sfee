@@ -1,7 +1,7 @@
 #include "sfse/PluginAPI.h"
 #include "sfse_common/sfse_version.h"
 #include "sfse_common/SafeWrite.h"
-
+#include "sfse_common/BranchTrampoline.h"
 
 #include "sfse/GameMenu.h"
 #include "sfse/GameData.h"
@@ -13,19 +13,29 @@
 
 #include "PluginInterface.h"
 #include "PresetInterface.h"
-#include "DataInterface.h"
+#include "ChargenInterface.h"
 #include "FileUtils.h"
 
 #include "SimpleIni.h"
+
+
+#include "xbyak/xbyak.h"
 
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 
 SFSEMessagingInterface* g_messagingInterface = nullptr;
 SFSEMenuInterface* g_menuInterface = nullptr;
+SFSETrampolineInterface* g_trampolineInterface = nullptr;
+SFSETaskInterface* g_taskInterface = nullptr;
 
 InterfaceMap g_interfaceMap;
 PresetInterface g_presetInterface;
-DataInterface g_dataInterface;
+ChargenInterface g_chargenInterface;
+
+namespace Patches
+{
+	bool bNormalizeBlendShapes = true;
+}
 
 std::unordered_map<std::string, std::unordered_map<std::wstring, std::wstring>> g_translations;
 
@@ -54,12 +64,105 @@ void SFSEMessageHandler(SFSEMessagingInterface::Message* message)
 			AddTranslations(BSScaleformManager::GetSingleton());
 		}
 
-#ifdef _DEBUG // TODO: Read load order from save file to determine Load-Order adjustment
-		g_dataInterface.LoadSliderMods();
-#endif
+		g_chargenInterface.LoadSliderMods();
 		break;
 	}
 	}
+}
+
+/*class NiRefObject
+{
+public:
+	virtual ~NiRefObject();
+	virtual void Release();
+};
+
+class BSMorphTargetData : public NiRefObject
+{
+public:
+	virtual ~BSMorphTargetData();
+
+	u32	unk08;
+	u32	unk0C;
+	u32	unk10;
+	u32	unk14;
+	u32	unk18;
+	u16	unk1C;
+	void* unk20; // StreamingResource Ptr
+	BSTArray<BSFixedStringCS> Morphs; // 28
+	u32	numAxis;
+	u32	numVertices;
+	void* unk40;
+};
+static_assert(sizeof(BSMorphTargetData) == 0x48);
+
+typedef BSMorphTargetData* (*_BSMorphTargetData_ctor)(BSMorphTargetData* __this, void* unk1, int16_t unk2);
+RelocAddr <_BSMorphTargetData_ctor> BSMorphTargetData_ctor(0x034D3988);
+_BSMorphTargetData_ctor BSMorphTargetData_ctor_Original = nullptr;
+
+
+
+BSMorphTargetData* BSMorphTargetData_ctor_Hook(BSMorphTargetData* __this, void* unk1, int16_t unk2)
+{
+	BSMorphTargetData* ret = BSMorphTargetData_ctor_Original(__this, unk1, unk2);
+
+	return ret;
+}*/
+
+bool RegisterHooks()
+{
+	/*if (g_trampolineInterface) {
+		void* branch = g_trampolineInterface->AllocateFromBranchPool(g_pluginHandle, 128);
+		if (!branch) {
+			return false;
+		}
+
+		g_branchTrampoline.setBase(128, branch);
+
+		void* local = g_trampolineInterface->AllocateFromLocalPool(g_pluginHandle, 128);
+		if (!local) {
+			return false;
+		}
+
+		g_localTrampoline.setBase(128, local);
+	}
+	else {
+		if (!g_branchTrampoline.create(128)) {
+			return false;
+		}
+		if (!g_localTrampoline.create(128, nullptr))
+		{
+			return false;
+		}
+	}*/
+
+	if (!Patches::bNormalizeBlendShapes) {
+		RelocAddr<uintptr_t> targetAddress(0x02BA4500 + 0x158); // 1.16.236 - 146265
+		safeWrite8(targetAddress.getUIntPtr(), 0xEB); // Write unconditional jmp instead of jbe
+	}
+
+	/*{
+		struct BSMorphTargetData_ctor_Code : Xbyak::CodeGenerator {
+			BSMorphTargetData_ctor_Code(void* buf) : Xbyak::CodeGenerator(4096, buf)
+			{
+				Xbyak::Label retnLabel;
+
+				mov(ptr[rsp + 0x08], rcx);
+				jmp(ptr[rip + retnLabel]);
+
+				L(retnLabel);
+				dq(BSMorphTargetData_ctor.getUIntPtr() + 5);
+			}
+		};
+
+		void* codeBuf = g_localTrampoline.startAlloc();
+		BSMorphTargetData_ctor_Code code(codeBuf);
+		g_localTrampoline.endAlloc(code.getCurr());
+		BSMorphTargetData_ctor_Original = (_BSMorphTargetData_ctor)codeBuf;
+		g_branchTrampoline.write5Branch(BSMorphTargetData_ctor.getUIntPtr(), (uintptr_t)BSMorphTargetData_ctor_Hook);
+	}*/
+
+	return true;
 }
 
 extern "C" {
@@ -73,7 +176,7 @@ __declspec(dllexport) SFSEPluginVersionData SFSEPlugin_Version =
 
 	0,	// not address independent
 	0,	// not structure independent
-	{ RUNTIME_VERSION_1_8_86, 0 },
+	{ RUNTIME_VERSION_1_16_236, 0 },
 
 	0,	// works with any version of the script extender. you probably do not need to put anything here
 	0, 0,	// set these reserved fields to 0
@@ -96,6 +199,18 @@ __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
 			return false;
 		}
 
+		g_trampolineInterface = static_cast<SFSETrampolineInterface*>(sfse->QueryInterface(kInterface_Trampoline));
+		if (!g_trampolineInterface)
+		{
+			return false;
+		}
+
+		g_taskInterface = static_cast<SFSETaskInterface*>(sfse->QueryInterface(kInterface_Task));
+		if (!g_taskInterface)
+		{
+			return false;
+		}
+
 		g_messagingInterface->RegisterListener(g_pluginHandle, "SFSE", SFSEMessageHandler);
 		g_menuInterface->RegisterMenuMovieCreated(OnMenuMovieCreated);
 
@@ -105,19 +220,14 @@ __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
 		}
 
 		g_interfaceMap.AddInterface("Preset", &g_presetInterface);
-#ifdef _DEBUG // TODO: Read load order from save file to determine Load-Order adjustment
-		g_interfaceMap.AddInterface("Data", &g_dataInterface);
-#endif
+		g_interfaceMap.AddInterface("Chargen", &g_chargenInterface);
 
 		CSimpleIniW ini;
 		SI_Error rc = ini.LoadFile(std::string(FileUtils::GetExecutablePath() + "/Data/SFSE/Plugins/sfee.ini").c_str());
 		if (rc == SI_OK)
 		{
-			bool normalize = ini.GetBoolValue(L"Patches", L"bNormalizeBlendShapes", true);
-			if (!normalize) {
-				RelocAddr<uintptr_t> targetAddress(0x00231F0FC + 0x158); // 1.8.86
-				safeWrite8(targetAddress.getUIntPtr(), 0xEB); // Write unconditional jmp instead of jbe
-			}
+			Patches::bNormalizeBlendShapes = ini.GetBoolValue(L"Patches", L"bNormalizeBlendShapes", Patches::bNormalizeBlendShapes);
+			
 
 			g_presetInterface.SetLocalSuffix(ini.GetValue(L"Presets", L"sLocalDirectorySuffix", L"SFSE\\Plugins\\Chargen\\Presets"));
 			g_presetInterface.SetModSuffix(ini.GetValue(L"Presets", L"sModDirectorySuffix", L"SFSE\\Plugins\\Chargen\\Presets"));
@@ -138,7 +248,7 @@ __declspec(dllexport) bool SFSEPlugin_Load(const SFSEInterface* sfse)
 			}
 		}
 
-		return true;
+		return RegisterHooks();
 	}
 	return false;
 }

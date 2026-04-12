@@ -1,6 +1,9 @@
 #include "PresetInterface.h"
+#include "ChargenInterface.h"
 #include "FormUtils.h"
 #include "FileUtils.h"
+#include "StringUtils.h"
+#include "JsonNPC.h"
 
 #include "sfse/GameData.h"
 #include "sfse/GameStreams.h"
@@ -8,10 +11,9 @@
 #include "sfse/GameObjects.h"
 #include "sfse/GameForms.h"
 
-#define JSON_DIAGNOSTICS 1
-#include <nlohmann/json.hpp>
 #include <fstream>
-#include <unordered_set>
+
+extern ChargenInterface g_chargenInterface;
 
 std::uint32_t PresetInterface::GetVersion() const
 {
@@ -35,15 +37,13 @@ bool PresetInterface::QueryPresetDependencies(const char* filePath, IPresetInter
             auto root = json::parse(data.get(), nullptr, true, true);
             auto j = root.template get<json::object_t>();
 
-            auto version = j["Version"].template get<int>();
-
             bool pass = true;
 
             if (j.contains("Dependencies"))
             {
                 auto dependencies = j["Dependencies"].template get<std::unordered_set<std::string>>();
 
-                std::unordered_set<std::string> modSet;
+                std::unordered_set<std::istring> modSet;
                 for (auto mod : dataHandler->CompiledFileCollection.FileA)
                 {
                     modSet.insert(mod->filePath);
@@ -55,7 +55,7 @@ bool PresetInterface::QueryPresetDependencies(const char* filePath, IPresetInter
 
                 for (auto& item : dependencies)
                 {
-                    bool active = modSet.contains(item);
+                    bool active = modSet.contains(item.c_str());
                     if (visitor)
                     {
                         active ? visitor->PassDependency(item.c_str()) : visitor->FailDependency(item.c_str());
@@ -76,136 +76,32 @@ bool PresetInterface::QueryPresetDependencies(const char* filePath, IPresetInter
     return false;
 }
 
-bool PresetInterface::ParsePreset(const char* jsonData, PresetInterface::PresetData& data, IPresetInterface::ErrorVisitor* visitor)
+bool PresetInterface::ParseNPC(const char* jsonData, PresetData& data, IPresetInterface::ErrorVisitor* visitor)
+{
+    using json = nlohmann::json;
+    try
+    {
+        auto npcPreset = json::parse(jsonData, nullptr, true, true).template get<NPCPreset>();
+        npcPreset.ToPreset(data, visitor);
+        return true;
+    }
+    catch (json::exception& except)
+    {
+        if (visitor)
+            visitor->Error(except.what());
+    }
+
+    return false;
+}
+
+bool PresetInterface::ParsePreset(const char* jsonData, PresetData& data, IPresetInterface::ErrorVisitor* visitor)
 {
     using json = nlohmann::json;
 
     try
     {
         auto j = json::parse(jsonData, nullptr, true, true).template get<json::object_t>();
-
-        data.Version = j["Version"].template get<int>();
-        if(j.contains("Name")) data.Name = j["Name"].template get<std::string>();
-
-        auto raceName = j["Race"].template get<std::string>();
-        TESForm* form = FormUtils::from_identifier(raceName);
-        if (!form) {
-            if (visitor)
-                visitor->Error(std::format("Invalid race {} specified", raceName.c_str()).c_str());
-            return false;
-        }
-        else if (form->formType != static_cast<u8>(FormType::kRACE))
-        {
-            if (visitor)
-                visitor->Error(std::format("Form resolved by {} is not a race form", raceName.c_str()).c_str());
-            return false;
-        }
-
-        data.Race = static_cast<TESRace*>(form);
-        data.Gender = 0;
-        auto genderName = j["Gender"].template get<std::string>();
-        if (_stricmp(genderName.c_str(), "Female") == 0) {
-            data.Gender = 1;
-        }
-
-        data.MorphWeight.x = j["Weight"]["Thin"].template get<float>();
-        data.MorphWeight.y = j["Weight"]["Muscular"].template get<float>();
-        data.MorphWeight.z = j["Weight"]["Heavy"].template get<float>();
-
-        auto headParts = j["HeadParts"].template get<std::vector<std::string>>();
-        for (auto& part : headParts)
-        {
-            auto headPart = FormUtils::from_identifier(part);
-            if (headPart->formType != static_cast<u8>(FormType::kHDPT))
-                continue;
-
-            data.HeadPartsA.push_back(static_cast<BGSHeadPart*>(headPart));
-        }
-
-        auto headPartData = j["HeadPartData"].template get<std::vector<json::object_t>>();
-        for (auto& part : headPartData)
-        {
-            PresetData::HeadPartData item{
-               part["Type"].template get<u32>(),
-               part["unk04"].template get<u32>(),
-               part["Group"].template get<std::string>(),
-               part["Name"].template get<std::string>(),
-               part["Texture"].template get<std::string>(),
-               PresetData::HeadPartData::Color{
-                  static_cast<u8>(part["Color"]["r"].template get<u32>()),
-                  static_cast<u8>(part["Color"]["g"].template get<u32>()),
-                  static_cast<u8>(part["Color"]["b"].template get<u32>()),
-                  static_cast<u8>(part["Color"]["a"].template get<u32>()),
-               },
-               static_cast<u32>(part["Intensity"].template get<float>() * 128)
-            };
-            data.HeadPartDataA.push_back(item);
-        }
-
-        if (j.contains("unk408"))
-        {
-            auto unk408 = j["unk408"].template get<std::vector<float>>();
-            data.unk408 = std::make_unique<std::vector<float>>();
-            for (auto f : unk408)
-            {
-                data.unk408->emplace_back(f);
-            }
-        }
-
-        if (j.contains("AdditionalSliders"))
-        {
-            auto sliders = j["AdditionalSliders"].template get<std::unordered_map<std::string, float>>();
-            std::unordered_map<u32, float> newSliders;
-            for (auto& item : sliders)
-            {
-                char* endPtr;
-                auto key = std::strtoul(item.first.c_str(), &endPtr, 0);
-                if (endPtr == item.first.c_str() || *endPtr != '\0')
-                {
-                    key = FormUtils::from_identifier_id(item.first);
-                    if (key != 0) {
-                        newSliders[key] = item.second;
-                    }
-                }
-                else
-                {
-                    newSliders[key] = item.second;
-                }
-            }
-
-            data.AdditionalSliders = std::make_unique<std::unordered_map<u32, float>>();
-            for (auto& item : newSliders)
-            {
-                data.AdditionalSliders->insert_or_assign(item.first, item.second);
-            }
-        }
-
-        if (j.contains("Morphs"))
-        {
-            auto morphs = j["Morphs"].template get<json::object_t>();
-
-            data.Morphs = std::make_unique<std::unordered_map<u32, std::unordered_map<std::string, float>>>();
-            for (auto& item : morphs)
-            {
-                auto key = std::strtoul(item.first.c_str(), nullptr, 0);
-                (*data.Morphs)[key] = item.second.template get<std::unordered_map<std::string, float>>();
-            }
-        }
-
-        if (j.contains("ShapeBlendData"))
-        {
-            data.ShapeBlendData = std::make_unique<std::unordered_map<std::string, float>>();
-            *data.ShapeBlendData = j["ShapeBlendData"].template get<std::unordered_map<std::string, float>>();
-        }
-
-        data.SkinTone = j["SkinTone"].template get<u32>();
-        data.Teeth = j["Teeth"].template get<std::string>();
-        data.JewelryColor = j["JewelryColor"].template get<std::string>();
-        data.EyeColor = j["EyeColor"].template get<std::string>();
-        data.HairColor = j["HairColor"].template get<std::string>();
-        data.FacialHairColor = j["FacialHairColor"].template get<std::string>();
-        data.EyebrowColor = j["EyebrowColor"].template get<std::string>();
-        data.Pronoun = static_cast<u8>(j["Pronoun"].template get<u32>());
+        JsonToPreset(j, data, visitor);
         return true;
     }
     catch (json::exception& except)
@@ -235,7 +131,19 @@ bool PresetInterface::LoadPreset(const char* filePath, TESNPC* target, IPresetIn
         stream.DoRead(data.get(), stream.GetSize());
 
         PresetData preset;
-        if (ParsePreset(data.get(), preset, visitor))
+        bool parseResult = false;
+
+        std::istring fileInsensitive(filePath);
+        if (fileInsensitive.rfind(".npc") != std::string::npos)
+        {
+            parseResult = ParseNPC(data.get(), preset, visitor);
+        }
+        else
+        {
+            parseResult = ParsePreset(data.get(), preset, visitor);
+        }
+
+        if (parseResult)
         {
             ApplyPresetDataToNPC(preset, target);
             return true;
@@ -261,7 +169,7 @@ void PresetInterface::GetDirectory(const IPresetInterface::Directory& dir, IPres
     }
 }
 
-void PresetInterface::ApplyPresetDataToNPC(const PresetInterface::PresetData& data, TESNPC* npc)
+void PresetInterface::ApplyPresetDataToNPC(const PresetData& data, TESNPC* npc)
 {
     if (!data.Name.empty()) {
         npc->strFullName = data.Name.c_str();
@@ -327,24 +235,24 @@ void PresetInterface::ApplyPresetDataToNPC(const PresetInterface::PresetData& da
            data.name.c_str(),
            data.texture.c_str(),
            TESNPC::HeadPartData::Color{
-              data.color.r,
-              data.color.g,
-              data.color.b,
               data.color.a,
+              data.color.b,
+              data.color.g,
+              data.color.r,
            },
            data.intensity
         };
         npc->HeadPartDataA.emplace_back(item);
     }
 
-    if (data.unk408)
+    if (data.BodyMorphRegionValuesA)
     {
         if (npc->unk3D0)
             npc->unk3D0->clear();
         else
             npc->unk3D0 = new BSTArray<float>();
 
-        for (auto f : *data.unk408)
+        for (auto f : *data.BodyMorphRegionValuesA)
         {
             npc->unk3D0->emplace_back(f);
         }
@@ -384,13 +292,13 @@ void PresetInterface::ApplyPresetDataToNPC(const PresetInterface::PresetData& da
             npc->unk3E0->clear();
         }
         else
-            npc->unk3E0 = new BSTHashMap<u32, BSTHashMap<BSFixedString, float>*>();
+            npc->unk3E0 = new BSTHashMap<u32, BSTHashMap<BSFixedStringCS, float>*>();
 
         for (auto& item : *data.Morphs)
         {
             if (!item.second.empty())
             {
-                auto subMap = new BSTHashMap<BSFixedString, float>();
+                auto subMap = new BSTHashMap<BSFixedStringCS, float>();
                 for (auto& subItem : item.second)
                 {
                     subMap->insert_or_assign({ subItem.first.c_str(), subItem.second });
@@ -410,13 +318,12 @@ void PresetInterface::ApplyPresetDataToNPC(const PresetInterface::PresetData& da
         npc->unk3E0 = nullptr;
     }
     
-
     if (data.ShapeBlendData)
     {
         if (npc->shapeBlendData)
             npc->shapeBlendData->clear();
         else
-            npc->shapeBlendData = new BSTHashMap<BSFixedString, float>();
+            npc->shapeBlendData = new BSTHashMap<BSFixedStringCS, float>();
 
         for (auto& item : *data.ShapeBlendData)
         {
@@ -442,21 +349,11 @@ void PresetInterface::ApplyPresetDataToNPC(const PresetInterface::PresetData& da
     npc->pFaceNPC = nullptr;
 }
 
-bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInterface::ErrorVisitor* visitor)
+void PresetInterface::NPCToJson(TESNPC* npc, nlohmann::json& j)
 {
     using json = nlohmann::json;
 
-    if (npc->formType != static_cast<u8>(FormType::kNPC_))
-    {
-        if(visitor)
-            visitor->Error(std::format("Source NPC {:X} wrong type {}", npc->formID, npc->formType).c_str());
-        return false;
-    }
-
-    std::unordered_set<const TESFile*> dependencies;
-
-    json j;
-    j["Version"] = kFileVersion1;
+    j["Version"] = kFileVersion2;
     j["Name"] = npc->strFullName.c_str();
     j["Race"] = FormUtils::to_identifier(npc->pFormRace);
     j["Gender"] = npc->actorData.GetSex() == 0 ? "Male" : "Female";
@@ -466,13 +363,15 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
         {"Heavy", npc->MorphWeight.z}
     };
 
+    std::unordered_set<const TESFile*> dependencies;
+
     auto headPartA = json::array();
     for (auto part : npc->HeadPartsA)
     {
         headPartA.push_back(FormUtils::to_identifier(part, &dependencies));
     }
     j["HeadParts"] = headPartA;
-    
+
     if (npc->unk3D0)
     {
         auto unk408 = json::array();
@@ -480,12 +379,12 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
         {
             unk408.push_back(f);
         }
-        j["unk408"] = unk408;
+        j["BodyMorphRegionValues"] = unk408;
     }
     if (npc->AdditionalSliders)
     {
         auto sliders = json::object();
-        for (auto item : *npc->AdditionalSliders)
+        for (auto& item : *npc->AdditionalSliders)
         {
             if (item.Key & 0xFF000000)
             {
@@ -504,7 +403,7 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
     if (npc->unk3E0)
     {
         auto unk418 = json::object();
-        for (auto item : *npc->unk3E0)
+        for (auto& item : *npc->unk3E0)
         {
             if (item.Value)
             {
@@ -521,7 +420,7 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
     }
 
     auto headPartDataA = json::array();
-    for (auto part : npc->HeadPartDataA)
+    for (auto& part : npc->HeadPartDataA)
     {
         auto headPartData = json::object();
         headPartData["Type"] = part.type;
@@ -550,9 +449,16 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
     if (npc->shapeBlendData)
     {
         auto shapeBlendData = json::object();
-        for (auto item : *npc->shapeBlendData)
+        for (auto& item : *npc->shapeBlendData)
         {
             shapeBlendData[item.Key.c_str()] = item.Value;
+
+            // If the slider is coming from a mod, write it as a dependency
+            auto file = g_chargenInterface.GetSliderDependency(item.Key.c_str(), static_cast<IChargenInterface::Gender>(npc->actorData.GetSex()));
+            if (file)
+            {
+                dependencies.insert(file);
+            }
         }
         j["ShapeBlendData"] = shapeBlendData;
     }
@@ -569,8 +475,189 @@ bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInter
         }
         j["Dependencies"] = deps;
     }
+}
+
+bool PresetInterface::JsonToPreset(const nlohmann::json& j, PresetData& data, IPresetInterface::ErrorVisitor* visitor)
+{
+    using json = nlohmann::json;
+
+    data.Version = j["Version"].template get<int>();
+    if (j.contains("Name")) data.Name = j["Name"].template get<std::string>();
+
+    auto raceName = j["Race"].template get<std::string>();
+    TESForm* form = FormUtils::from_identifier(raceName);
+    if (!form) {
+        if (visitor)
+            visitor->Error(std::format("Invalid race {} specified", raceName.c_str()).c_str());
+        return false;
+    }
+    else if (form->formType != static_cast<u8>(FormType::kRACE))
+    {
+        if (visitor)
+            visitor->Error(std::format("Form resolved by {} is not a race form", raceName.c_str()).c_str());
+        return false;
+    }
+
+    data.Race = static_cast<TESRace*>(form);
+    data.Gender = 0;
+    auto genderName = j["Gender"].template get<std::string>();
+    if (_stricmp(genderName.c_str(), "Female") == 0) {
+        data.Gender = 1;
+    }
+
+    data.MorphWeight.x = j["Weight"]["Thin"].template get<float>();
+    data.MorphWeight.y = j["Weight"]["Muscular"].template get<float>();
+    data.MorphWeight.z = j["Weight"]["Heavy"].template get<float>();
+
+    auto headParts = j["HeadParts"].template get<std::vector<std::string>>();
+    for (auto& part : headParts)
+    {
+        auto headPart = FormUtils::from_identifier(part);
+        if (!headPart || headPart->formType != static_cast<u8>(FormType::kHDPT))
+            continue;
+
+        data.HeadPartsA.push_back(static_cast<BGSHeadPart*>(headPart));
+    }
+
+    auto headPartData = j["HeadPartData"].template get<std::vector<json::object_t>>();
+    for (auto& part : headPartData)
+    {
+        PresetData::HeadPartData::Color v1{
+             static_cast<u8>(part["Color"]["r"].template get<u32>()),
+             static_cast<u8>(part["Color"]["g"].template get<u32>()),
+             static_cast<u8>(part["Color"]["b"].template get<u32>()),
+             static_cast<u8>(part["Color"]["a"].template get<u32>()),
+        };
+        PresetData::HeadPartData::Color v2{
+             static_cast<u8>(part["Color"]["a"].template get<u32>()),
+             static_cast<u8>(part["Color"]["b"].template get<u32>()),
+             static_cast<u8>(part["Color"]["g"].template get<u32>()),
+             static_cast<u8>(part["Color"]["r"].template get<u32>()),
+        };
+
+        PresetData::HeadPartData item{
+           part["Type"].template get<u32>(),
+           part["unk04"].template get<u32>(),
+           part["Group"].template get<std::string>(),
+           part["Name"].template get<std::string>(),
+           part["Texture"].template get<std::string>(),
+           data.Version == kFileVersion1 ? v1 : v2,
+           static_cast<u32>(part["Intensity"].template get<float>() * 128)
+        };
+        data.HeadPartDataA.push_back(item);
+    }
+
+    if (j.contains("unk408"))
+    {
+        auto unk408 = j["unk408"].template get<std::vector<float>>();
+        data.BodyMorphRegionValuesA = std::make_unique<std::vector<float>>();
+        for (auto f : unk408)
+        {
+            data.BodyMorphRegionValuesA->emplace_back(f);
+        }
+    }
+    if (j.contains("BodyMorphRegionValues"))
+    {
+        auto bodyMorphRegionValues = j["BodyMorphRegionValues"].template get<std::vector<float>>();
+        data.BodyMorphRegionValuesA = std::make_unique<std::vector<float>>();
+        for (auto f : bodyMorphRegionValues)
+        {
+            data.BodyMorphRegionValuesA->emplace_back(f);
+        }
+    }
+
+    if (j.contains("AdditionalSliders"))
+    {
+        auto sliders = j["AdditionalSliders"].template get<std::unordered_map<std::string, float>>();
+        std::unordered_map<u32, float> newSliders;
+        for (auto& item : sliders)
+        {
+            char* endPtr;
+            auto key = std::strtoul(item.first.c_str(), &endPtr, 0);
+            if (endPtr == item.first.c_str() || *endPtr != '\0')
+            {
+                key = FormUtils::from_identifier_id(item.first);
+                if (key != 0) {
+                    newSliders[key] = item.second;
+                }
+            }
+            else
+            {
+                newSliders[key] = item.second;
+            }
+        }
+
+        data.AdditionalSliders = std::make_unique<std::unordered_map<u32, float>>();
+        for (auto& item : newSliders)
+        {
+            data.AdditionalSliders->insert_or_assign(item.first, item.second);
+        }
+    }
+
+    if (j.contains("Morphs"))
+    {
+        auto morphs = j["Morphs"].template get<json::object_t>();
+
+        data.Morphs = std::make_unique<std::unordered_map<u32, std::unordered_map<std::string, float>>>();
+        for (auto& item : morphs)
+        {
+            auto key = std::strtoul(item.first.c_str(), nullptr, 0);
+            (*data.Morphs)[key] = item.second.template get<std::unordered_map<std::string, float>>();
+        }
+    }
+
+    if (j.contains("ShapeBlendData"))
+    {
+        data.ShapeBlendData = std::make_unique<std::unordered_map<std::string, float>>();
+        *data.ShapeBlendData = j["ShapeBlendData"].template get<std::unordered_map<std::string, float>>();
+    }
+
+    data.SkinTone = j["SkinTone"].template get<u32>();
+    data.Teeth = j["Teeth"].template get<std::string>();
+    data.JewelryColor = j["JewelryColor"].template get<std::string>();
+    data.EyeColor = j["EyeColor"].template get<std::string>();
+    data.HairColor = j["HairColor"].template get<std::string>();
+    data.FacialHairColor = j["FacialHairColor"].template get<std::string>();
+    data.EyebrowColor = j["EyebrowColor"].template get<std::string>();
+    data.Pronoun = static_cast<u8>(j["Pronoun"].template get<u32>());
+    return true;
+}
+
+bool PresetInterface::SavePreset(const char* filePath, TESNPC* npc, IPresetInterface::ErrorVisitor* visitor)
+{
+    using json = nlohmann::json;
+
+    if (npc->formType != static_cast<u8>(FormType::kNPC_))
+    {
+        if(visitor)
+            visitor->Error(std::format("Source NPC {:X} wrong type {}", npc->formID, npc->formType).c_str());
+        return false;
+    }
+
+    json j;
+    NPCToJson(npc, j);
 
     std::ofstream fileOut(filePath);
     fileOut << std::setw(4) << j << std::endl;
+    return true;
+}
+
+bool PresetInterface::SaveNPC(const char* filePath, TESNPC* npc, IPresetInterface::ErrorVisitor* visitor)
+{
+    using json = nlohmann::json;
+
+    PresetData npcPreset;
+    json npcJson;
+    NPCToJson(npc, npcJson);
+    JsonToPreset(npcJson, npcPreset, visitor);
+
+    NPCPreset preset;
+    preset.FromPreset(npcPreset, visitor);
+
+    json j;
+    to_json(j, preset);
+
+    std::ofstream fileOut(filePath);
+    fileOut << std::setw(3) << j << std::endl;
     return true;
 }

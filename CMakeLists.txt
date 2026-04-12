@@ -43,9 +43,9 @@ generate_product_version(
    NAME "Starfield Engine Extender"
    ICON ""
    VERSION_MAJOR 1
-   VERSION_MINOR 0
+   VERSION_MINOR 1
    VERSION_PATCH 0
-   VERSION_REVISION 1
+   VERSION_REVISION 21
 )
 
 add_library(

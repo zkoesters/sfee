@@ -50,6 +50,7 @@ public:
 	{
 		kPluginVersion1 = 1,
 		kFileVersion1 = 1,
+		kFileVersion2,
 		kCurrentPluginVersion = kPluginVersion1,
 	};
 
@@ -74,7 +75,7 @@ public:
 	virtual void GetDirectory(const Directory& dir, StringVisitor& visitor) = 0;
 };
 
-class IDataInterface : public IPluginInterface
+class IChargenInterface : public IPluginInterface
 {
 public:
 	enum : std::uint32_t
@@ -83,4 +84,24 @@ public:
 		kFileVersion1 = 1,
 		kCurrentPluginVersion = kPluginVersion1,
 	};
+
+	enum class Gender
+	{
+		BOTH = -1,
+		MALE = 0,
+		FEMALE
+	};
+
+	class MorphTargetSliderVisitor
+	{
+	public:
+		virtual void Visit(const char* morphKey, const char* displayName, const char* identifier, const std::int64_t order) = 0;
+	};
+
+	// Adds a Morph Target slider to the Body section of the menu, overwrites a previous entry if it exists
+	// Identifier should be your ESM/ESP/ESL name so that sliders can be identified by Chargen as dependencies to a Preset
+	// Sorting is Order > Identifier > DisplayName ASC
+	virtual void AddMorphTargetSlider(const char* morphKey, const char* displayName, const char* identifier, const Gender& gender, const std::int64_t order = 0) = 0;
+
+	virtual void ForEachSlider(const Gender& gender, MorphTargetSliderVisitor& visitor) = 0;
 };

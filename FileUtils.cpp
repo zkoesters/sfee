@@ -32,16 +32,15 @@ namespace FileUtils
     {
         auto dataHandler = TESDataHandler::GetSingleton();
 
-        // Try normal plugin
-        for (auto item : dataHandler->CompiledFileCollection.FileA)
+        auto node = &dataHandler->listFiles.node;
+        while (node)
         {
-            functor(item);
-        }
+            if (node->m_item && node->m_item->cCompileIndex != 0xFF)
+            {
+                functor(node->m_item);
+            }
 
-        // Try small file
-        for (auto item : dataHandler->CompiledFileCollection.SmallFileA)
-        {
-            functor(item);
+            node = node->m_pkNext;
         }
     }
 }

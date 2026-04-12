@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <xstring>
+#include <iostream>
 #include <unordered_set>
 
 class TESForm;
@@ -9,7 +11,6 @@ class TESFile;
 namespace FormUtils
 {
 const TESFile* GetModByName(const char* name);
-const TESFile* GetModByFormId(const uint32_t formId);
 uint32_t GetFormIdFromMod(const TESFile* fileInfo, const uint32_t formLower);
 
 std::string to_identifier_raw(const TESFile* file, uint32_t formLower, std::unordered_set<const TESFile*>* dependencyOut = nullptr);

@@ -19,6 +19,15 @@ const TESFile* GetModByName(const char* name)
 		}
 	}
 
+	// Try medium file
+	for (auto item : dataHandler->CompiledFileCollection.MediumFileA)
+	{
+		if (_stricmp(item->filePath, name) == 0)
+		{
+			return item;
+		}
+	}
+
 	// Try small file
 	for (auto item : dataHandler->CompiledFileCollection.SmallFileA)
 	{
@@ -31,31 +40,32 @@ const TESFile* GetModByName(const char* name)
 	return nullptr;
 }
 
-const TESFile* GetModByFormId(const uint32_t formId)
-{
-	auto dataHandler = TESDataHandler::GetSingleton();
-
-	uint8_t modIndex = formId >> 24;
-	uint32_t modForm = formId & 0xFFFFFF;
-
-	if (modIndex == 0xFE)
-	{
-		uint16_t lightIndex = (formId >> 12) & 0xFFF;
-		if (lightIndex < dataHandler->CompiledFileCollection.SmallFileA.size())
-		{
-			return dataHandler->CompiledFileCollection.SmallFileA[lightIndex];
-		}
-	}
-	else if(modIndex < dataHandler->CompiledFileCollection.FileA.size())
-	{
-		return dataHandler->CompiledFileCollection.FileA[modIndex];
-	}
-	return nullptr;
-}
-
 uint32_t GetFormIdFromMod(const TESFile* fileInfo, const uint32_t formLower)
 {
-	return fileInfo->cCompileIndex != 0xFE ? uint32_t(fileInfo->cCompileIndex) << 24 | (formLower & 0xFFFFFF) : 0xFE000000 | (uint32_t(fileInfo->sSmallFileCompileIndex) << 12) | (formLower & 0xFFF);
+	uint32_t compileIndex = TESDataHandler::GetSingleton()->GetSubIndex(fileInfo);
+	if (compileIndex == -1)
+		return 0;
+
+	uint32_t lowerId = formLower;
+	if (fileInfo->IsLight())
+	{
+		lowerId &= 0xFFF;
+		compileIndex &= 0xFFF;
+		lowerId |= compileIndex << 12;
+		compileIndex = TESFile::LightIndex;
+	}
+	else if (fileInfo->IsMedium())
+	{
+		lowerId &= 0xFFF;
+		compileIndex &= 0xFFF;
+		lowerId |= compileIndex << 12;
+		compileIndex = TESFile::MediumIndex;
+	}
+	else
+	{
+		lowerId &= 0xFFFFFF;
+	}
+	return (compileIndex << 24) | lowerId;
 }
 
 std::string to_identifier_raw(const TESFile* file, uint32_t formLower, std::unordered_set<const TESFile*>* dependencyOut)
@@ -70,12 +80,12 @@ std::string to_identifier_id(uint32_t formId, std::unordered_set<const TESFile*>
 {
 	uint32_t formLower = formId & 0xFFFFFF;
 	uint8_t modIndex = formId >> 24;
-	if (modIndex == 0xFE)
+	if (TESFile::IsLight(modIndex) || TESFile::IsMedium(modIndex))
 	{
 		formLower &= 0xFFF;
 	}
 
-	const TESFile* file = GetModByFormId(formId);
+	const TESFile* file = TESDataHandler::GetSingleton()->GetModByFormId(formId);
 	if (file) {
 		return to_identifier_raw(file, formLower, dependencyOut);
 	}
