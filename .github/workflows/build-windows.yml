@@ -1,0 +1,46 @@
+name: build-windows
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout sfee
+        uses: actions/checkout@v4
+        with:
+          path: sfee
+
+      - name: Checkout SFSE v0.2.21
+        uses: actions/checkout@v4
+        with:
+          repository: ianpatt/sfse
+          ref: v0.2.21
+          path: sfse
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        shell: pwsh
+        working-directory: sfee
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5
+
+      - name: Build
+        shell: pwsh
+        working-directory: sfee
+        run: cmake --build build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sfee-release
+          path: |
+            sfee/build/**/*.dll
+            sfee/build/**/*.pdb
