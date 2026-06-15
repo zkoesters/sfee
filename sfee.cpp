@@ -137,7 +137,7 @@ bool RegisterHooks()
 	}*/
 
 	if (!Patches::bNormalizeBlendShapes) {
-		RelocAddr<uintptr_t> targetAddress(0x02BA4500 + 0x158); // 1.16.236 - 146265
+		RelocAddr<uintptr_t> targetAddress(0x02BA466C); // 1.16.244
 		safeWrite8(targetAddress.getUIntPtr(), 0xEB); // Write unconditional jmp instead of jbe
 	}
 
@@ -176,7 +176,7 @@ __declspec(dllexport) SFSEPluginVersionData SFSEPlugin_Version =
 
 	0,	// not address independent
 	0,	// not structure independent
-	{ RUNTIME_VERSION_1_16_236, 0 },
+	{ RUNTIME_VERSION_1_16_244, 0 },
 
 	0,	// works with any version of the script extender. you probably do not need to put anything here
 	0, 0,	// set these reserved fields to 0

@@ -28,6 +28,11 @@ extern PresetInterface g_presetInterface;
 extern ChargenInterface g_chargenInterface;
 extern SFSETaskInterface* g_taskInterface;
 
+inline bool operator==(const BSFixedStringWCS& lhs, const BSFixedStringWCS& rhs)
+{
+	return lhs.pData == rhs.pData;
+}
+
 class SFEEScaleform_GetDirectoryListing : public Scaleform::GFx::FunctionHandler
 {
 public:
@@ -600,7 +605,9 @@ void AddTranslations(BSScaleformManager* manager)
 			// Apply English translations
 			for (auto& item : g_translations["en"])
 			{
-				translator->translationMap->insert_or_assign({ item.first.c_str(), item.second.c_str() });
+				BSFixedStringWCS key(item.first.c_str());
+				BSFixedStringWCS value(item.second.c_str());
+				translator->translationMap->insert_or_assign(key, value);
 			}
 
 			// Apply language specific ontop
@@ -609,7 +616,9 @@ void AddTranslations(BSScaleformManager* manager)
 			{
 				for (auto& item : g_translations[language->data.s])
 				{
-					translator->translationMap->insert_or_assign({ item.first.c_str(), item.second.c_str() });
+					BSFixedStringWCS key(item.first.c_str());
+					BSFixedStringWCS value(item.second.c_str());
+					translator->translationMap->insert_or_assign(key, value);
 				}
 			}
 			translator->Release();
